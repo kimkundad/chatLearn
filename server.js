@@ -192,6 +192,6 @@ io.on('connection', socket => {
 });
 
 // 🔥 เปิดเซิร์ฟเวอร์
-server.listen(3001, () => {
+server.listen(3006, () => {
     console.log('🚀 Server running on port 3001');
 });
