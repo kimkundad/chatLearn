@@ -39,29 +39,42 @@ db.connect(err => {
 });
 
 // 🔥 API สร้างห้องแชทใหม่หากยังไม่มี
-app.post('/create-room', (req, res) => {
+// ✅ API สร้างห้องแชทใหม่หากยังไม่มี
+app.post('/create-room', async (req, res) => {
     const { student_id, teacher_id } = req.body;
-    console.log('req.body:', req.body);
+    console.log('📩 Received request:', req.body);
 
     if (!student_id || !teacher_id) {
+        console.log("❌ Missing student_id or teacher_id");
         return res.status(400).json({ error: "❌ student_id and teacher_id are required" });
     }
 
-    const checkRoomQuery = "SELECT id FROM chat_rooms WHERE student_id = ? AND teacher_id = ?";
-    db.query(checkRoomQuery, [student_id, teacher_id], (err, results) => {
-        if (err) return res.status(500).json({ error: err });
+    try {
+        const [existingRooms] = await db.promise().query(
+            "SELECT id FROM chat_rooms WHERE student_id = ? AND teacher_id = ?",
+            [student_id, teacher_id]
+        );
 
-        if (results.length > 0) {
-            return res.json({ room_id: results[0].id });
+        if (existingRooms.length > 0) {
+            console.log("✅ Room already exists:", existingRooms[0].id);
+            return res.json({ room_id: existingRooms[0].id });
         }
 
-        const createRoomQuery = "INSERT INTO chat_rooms (student_id, teacher_id) VALUES (?, ?)";
-        db.query(createRoomQuery, [student_id, teacher_id], (err, result) => {
-            if (err) return res.status(500).json({ error: err });
-            res.json({ room_id: result.insertId });
-        });
-    });
+        // ✅ สร้างห้องใหม่
+        const [result] = await db.promise().query(
+            "INSERT INTO chat_rooms (student_id, teacher_id) VALUES (?, ?)",
+            [student_id, teacher_id]
+        );
+
+        console.log("✅ Room created with ID:", result.insertId);
+        res.json({ room_id: result.insertId });
+
+    } catch (err) {
+        console.error("❌ Database Error:", err);
+        res.status(500).json({ error: err });
+    }
 });
+
 
 // 🔥 API ดึงประวัติแชทตามห้อง
 app.get('/messages/:room_id', (req, res) => {
