@@ -20,27 +20,47 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true })); // ✅ รองรับ Form Data
 
 // 🔥 เชื่อมต่อฐานข้อมูล MySQL บน DigitalOcean
-const db = mysql.createConnection({
+const db = mysql.createPool({
+    connectionLimit: 10, // ✅ กำหนดจำนวน connection pool
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
     user: process.env.DB_USERNAME,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_DATABASE,
-    ssl: { rejectUnauthorized: false } // ✅ ใช้ SSL ในการเชื่อมต่อ
+    waitForConnections: true,
+    queueLimit: 0
 });
 
-// 🔥 ตรวจสอบการเชื่อมต่อ
-db.connect(err => {
+// ✅ ตรวจสอบว่าการเชื่อมต่อฐานข้อมูลทำงานได้
+db.getConnection((err, connection) => {
     if (err) {
-        console.error('❌ MySQL Connection Failed:', err);
+        console.error('❌ Database Connection Failed:', err);
     } else {
-        console.log('✅ MySQL Connected to DigitalOcean!');
+        console.log('✅ MySQL Connected Successfully!');
+        connection.release();
     }
 });
 
-// 🔥 API สร้างห้องแชทใหม่หากยังไม่มี
+
+// ✅ ฟังก์ชัน Handle Disconnect & Reconnect
+function handleDisconnect() {
+    db.getConnection((err, connection) => {
+        if (err) {
+            console.error('❌ Database Connection Lost:', err);
+            setTimeout(handleDisconnect, 2000); // 🔄 ลองเชื่อมต่อใหม่ทุก 2 วินาที
+        } else {
+            console.log('✅ MySQL Reconnected!');
+            connection.release();
+        }
+    });
+}
+
+// ✅ เรียกใช้การตรวจสอบเมื่อเซิร์ฟเวอร์เริ่มทำงาน
+handleDisconnect();
+
+
 // ✅ API สร้างห้องแชทใหม่หากยังไม่มี
-app.post('/create-room', async (req, res) => {
+app.post('/create-room', (req, res) => {
     const { student_id, teacher_id } = req.body;
     console.log('📩 Received request:', req.body);
 
@@ -49,31 +69,46 @@ app.post('/create-room', async (req, res) => {
         return res.status(400).json({ error: "❌ student_id and teacher_id are required" });
     }
 
-    try {
-        const [existingRooms] = await db.promise().query(
-            "SELECT id FROM chat_rooms WHERE student_id = ? AND teacher_id = ?",
-            [student_id, teacher_id]
-        );
-
-        if (existingRooms.length > 0) {
-            console.log("✅ Room already exists:", existingRooms[0].id);
-            return res.json({ room_id: existingRooms[0].id });
+    db.getConnection((err, connection) => {
+        if (err) {
+            console.error("❌ Database Connection Failed:", err);
+            return res.status(500).json({ error: "Database connection failed" });
         }
 
-        // ✅ สร้างห้องใหม่
-        const [result] = await db.promise().query(
-            "INSERT INTO chat_rooms (student_id, teacher_id) VALUES (?, ?)",
-            [student_id, teacher_id]
+        connection.query(
+            "SELECT id FROM chat_rooms WHERE student_id = ? AND teacher_id = ?",
+            [student_id, teacher_id],
+            (err, results) => {
+                if (err) {
+                    console.error("❌ Database Error:", err);
+                    connection.release();
+                    return res.status(500).json({ error: err });
+                }
+
+                if (results.length > 0) {
+                    console.log("✅ Room already exists:", results[0].id);
+                    connection.release();
+                    return res.json({ room_id: results[0].id });
+                }
+
+                connection.query(
+                    "INSERT INTO chat_rooms (student_id, teacher_id) VALUES (?, ?)",
+                    [student_id, teacher_id],
+                    (err, result) => {
+                        connection.release();
+                        if (err) {
+                            console.error("❌ Database Error:", err);
+                            return res.status(500).json({ error: err });
+                        }
+                        console.log("✅ Room created with ID:", result.insertId);
+                        res.json({ room_id: result.insertId });
+                    }
+                );
+            }
         );
-
-        console.log("✅ Room created with ID:", result.insertId);
-        res.json({ room_id: result.insertId });
-
-    } catch (err) {
-        console.error("❌ Database Error:", err);
-        res.status(500).json({ error: err });
-    }
+    });
 });
+
 
 
 // 🔥 API ดึงประวัติแชทตามห้อง
