@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const mysql = require('mysql2'); // ✅ ใช้ mysql2 แทน
+const mysql = require('mysql2');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -17,7 +17,8 @@ const io = new Server(server, {
 
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // ✅ รองรับ Form Data
+app.use(express.urlencoded({ extended: true }));
+
 
 // 🔥 เชื่อมต่อฐานข้อมูล MySQL บน DigitalOcean
 const db = mysql.createPool({
@@ -122,32 +123,39 @@ app.get('/messages/:room_id', (req, res) => {
     });
 });
 
-// ✅ API ดึงรายชื่อนักเรียนที่เคยแชท (ยกเว้นคุณครู)
+// ✅ API ดึงรายชื่อนักเรียนที่เคยแชท (สำหรับครู id=1)
 app.get('/students-chats', (req, res) => {
     const sql = `
-        SELECT 
-            cr.student_id, 
-            m.message, 
-            m.name, 
-            m.avatar, 
-            m.created_at, 
-            m.is_read,  -- ✅ เพิ่ม is_read
-            cr.id AS room_id, 
-            cr.teacher_id
+        SELECT
+            cr.id            AS room_id,
+            cr.student_id,
+            lm.message,
+            lm.message_type,
+            lm.media_url,
+            lm.name,
+            lm.avatar,
+            lm.created_at,
+            lm.sender_id     AS last_sender_id,
+            COALESCE(uc.unread_count, 0) AS unread_count
         FROM chat_rooms cr
-        JOIN messages m 
-            ON cr.id = m.room_id
-            AND m.created_at = (
-                SELECT MAX(created_at) 
-                FROM messages 
-                WHERE messages.room_id = cr.id 
-                AND messages.sender_id != 1
+        JOIN messages lm
+            ON lm.id = (
+                SELECT id FROM messages
+                WHERE room_id = cr.id
+                ORDER BY created_at DESC
+                LIMIT 1
             )
-        ORDER BY m.is_read ASC, m.created_at DESC`;
+        LEFT JOIN (
+            SELECT room_id, COUNT(*) AS unread_count
+            FROM messages
+            WHERE sender_id != 1 AND is_read = 0
+            GROUP BY room_id
+        ) uc ON uc.room_id = cr.id
+        ORDER BY unread_count DESC, lm.created_at DESC`;
 
     db.query(sql, (err, results) => {
         if (err) {
-            console.error("❌ Error fetching student chats:", err);
+            console.error('❌ Error fetching student chats:', err);
             return res.status(500).json({ error: 'Failed to fetch student chats' });
         }
         res.json(results);
@@ -183,24 +191,53 @@ app.post('/mark-as-read', (req, res) => {
 
 
 
-// 🔥 API ส่งข้อความ
+// 🔥 API ส่งข้อความ / รูปภาพ / เสียง
+// text  : { room_id, sender_id, message, name, avatar }
+// image : { room_id, sender_id, message_type:'image', media_url, name, avatar }
+// audio : { room_id, sender_id, message_type:'audio', media_url, duration, name, avatar }
 app.post('/send-message', (req, res) => {
-    const { room_id, sender_id, message, name, avatar } = req.body;
-    const sql = "INSERT INTO messages (room_id, sender_id, message, name, avatar) VALUES (?, ?, ?, ?, ?)";
+    const {
+        room_id, sender_id,
+        message      = null,
+        message_type = 'text',
+        media_url    = null,
+        duration     = null,
+        name, avatar,
+    } = req.body;
 
-    db.query(sql, [room_id, sender_id, message, name, avatar], (err, result) => {
+    if (!room_id || !sender_id) {
+        return res.status(400).json({ error: 'room_id และ sender_id จำเป็น' });
+    }
+    if (message_type === 'text' && !message) {
+        return res.status(400).json({ error: 'message จำเป็นสำหรับ type=text' });
+    }
+    if ((message_type === 'image' || message_type === 'audio') && !media_url) {
+        return res.status(400).json({ error: 'media_url จำเป็นสำหรับ type=image/audio' });
+    }
+
+    const sql = `INSERT INTO messages
+        (room_id, sender_id, message, message_type, media_url, duration, name, avatar)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    db.query(sql, [room_id, sender_id, message, message_type, media_url, duration || null, name || null, avatar || null], (err, result) => {
         if (err) {
             console.error('❌ Error saving message:', err);
             return res.status(500).json({ error: 'Failed to save message' });
         }
 
-        console.log('✅ Message saved to DB');
-
-        // ✅ ให้เซิร์ฟเวอร์ส่งข้อความไปยัง Socket.io
-        const messageData = { room_id, sender_id, message, name, avatar };
+        const messageData = {
+            id: result.insertId,
+            room_id: parseInt(room_id),
+            sender_id: parseInt(sender_id),
+            message,
+            message_type,
+            media_url: media_url || null,
+            duration: duration ? parseInt(duration) : null,
+            name: name || null,
+            avatar: avatar || null,
+        };
         io.to(room_id).emit('receiveMessage', messageData);
-
-        res.json({ success: 'Message sent successfully' });
+        res.json({ success: true, ...messageData });
     });
 });
 
