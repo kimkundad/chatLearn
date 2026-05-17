@@ -346,6 +346,22 @@ io.on('connection', socket => {
     });
 });
 
+// ── แจ้งเตือนอนุมัติคำสั่งซื้อ (เรียกจาก Laravel admin) ──────────────────────
+app.post('/notify-approved', async (req, res) => {
+    const { user_id, title, body } = req.body;
+    if (!user_id) return res.json({ status: 400, message: 'user_id required' });
+    try {
+        await sendFcmToUser(
+            user_id,
+            title  || 'คำสั่งซื้อได้รับการอนุมัติ ✅',
+            body   || 'คอร์สเรียนพร้อมให้เข้าเรียนแล้ว'
+        );
+        res.json({ status: 200, message: 'ok' });
+    } catch (e) {
+        res.json({ status: 500, message: e.message });
+    }
+});
+
 // 🔥 เปิดเซิร์ฟเวอร์
 server.listen(3006, () => {
     console.log('🚀 Server running on port 3001');
