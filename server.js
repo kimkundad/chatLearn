@@ -4,6 +4,12 @@ const mysql = require('mysql2');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
+const admin = require('firebase-admin');
+const serviceAccount = require('./learnsbuy-376d2-firebase-adminsdk-fbsvc-032bb1dcde.json');
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -59,6 +65,57 @@ function handleDisconnect() {
 // ✅ เรียกใช้การตรวจสอบเมื่อเซิร์ฟเวอร์เริ่มทำงาน
 handleDisconnect();
 
+
+// ✅ สร้าง table fcm_tokens ถ้ายังไม่มี
+db.query(`
+    CREATE TABLE IF NOT EXISTS fcm_tokens (
+        user_id INT PRIMARY KEY,
+        token VARCHAR(512) NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+`, (err) => {
+    if (err) console.error('❌ fcm_tokens table error:', err);
+    else console.log('✅ fcm_tokens table ready');
+});
+
+// ✅ บันทึก FCM token
+app.post('/save-fcm-token', (req, res) => {
+    const { user_id, fcm_token } = req.body;
+    if (!user_id || !fcm_token) return res.status(400).json({ error: 'user_id and fcm_token required' });
+
+    db.query(
+        'INSERT INTO fcm_tokens (user_id, token) VALUES (?, ?) ON DUPLICATE KEY UPDATE token = ?, updated_at = NOW()',
+        [user_id, fcm_token, fcm_token],
+        (err) => {
+            if (err) return res.status(500).json({ error: err });
+            console.log(`✅ FCM token saved for user ${user_id}`);
+            res.json({ success: true });
+        }
+    );
+});
+
+// ── ส่ง FCM notification ──────────────────────────────────────────────────
+async function sendFcmToUser(userId, title, body) {
+    return new Promise((resolve) => {
+        db.query('SELECT token FROM fcm_tokens WHERE user_id = ?', [userId], async (err, rows) => {
+            if (err || !rows.length) return resolve();
+            try {
+                await admin.messaging().send({
+                    token: rows[0].token,
+                    notification: { title, body },
+                    android: {
+                        priority: 'high',
+                        notification: { sound: 'default', channelId: 'chat_channel' },
+                    },
+                });
+                console.log(`✅ FCM sent to user ${userId}`);
+            } catch (e) {
+                console.error(`❌ FCM error for user ${userId}:`, e.message);
+            }
+            resolve();
+        });
+    });
+}
 
 // ✅ API สร้างห้องแชทใหม่หากยังไม่มี
 app.post('/create-room', (req, res) => {
@@ -238,6 +295,19 @@ app.post('/send-message', (req, res) => {
         };
         io.to(room_id).emit('receiveMessage', messageData);
         res.json({ success: true, ...messageData });
+
+        // ส่ง FCM ให้ผู้รับอีกฝั่ง
+        db.query('SELECT student_id, teacher_id FROM chat_rooms WHERE id = ?', [room_id], async (err2, rooms) => {
+            if (err2 || !rooms.length) return;
+            const { student_id, teacher_id } = rooms[0];
+            const recipientId = parseInt(sender_id) === teacher_id ? student_id : teacher_id;
+            const notifBody = message_type === 'text'
+                ? (message || '')
+                : message_type === 'image' ? '📷 รูปภาพ'
+                : message_type === 'audio' ? '🎙️ ข้อความเสียง'
+                : 'ข้อความใหม่';
+            await sendFcmToUser(recipientId, name || 'ข้อความใหม่', notifBody);
+        });
     });
 });
 
