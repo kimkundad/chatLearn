@@ -95,7 +95,7 @@ app.post('/save-fcm-token', (req, res) => {
 });
 
 // ── ส่ง FCM notification ──────────────────────────────────────────────────
-async function sendFcmToUser(userId, title, body) {
+async function sendFcmToUser(userId, title, body, data = {}) {
     return new Promise((resolve) => {
         db.query('SELECT token FROM fcm_tokens WHERE user_id = ?', [userId], async (err, rows) => {
             if (err || !rows.length) return resolve();
@@ -103,6 +103,7 @@ async function sendFcmToUser(userId, title, body) {
                 await admin.messaging().send({
                     token: rows[0].token,
                     notification: { title, body },
+                    data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
                     android: {
                         priority: 'high',
                         notification: { sound: 'default', channelId: 'chat_channel' },
@@ -355,7 +356,8 @@ app.post('/notify-approved', async (req, res) => {
         await sendFcmToUser(
             user_id,
             title  || 'คำสั่งซื้อได้รับการอนุมัติ ✅',
-            body   || 'คอร์สเรียนพร้อมให้เข้าเรียนแล้ว'
+            body   || 'คอร์สเรียนพร้อมให้เข้าเรียนแล้ว',
+            { type: 'order_approved' }
         );
         res.json({ status: 200, message: 'ok' });
     } catch (e) {
