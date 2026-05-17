@@ -248,6 +248,7 @@ app.post('/mark-as-read', (req, res) => {
 
 
 
+
 // 🔥 API ส่งข้อความ / รูปภาพ / เสียง
 // text  : { room_id, sender_id, message, name, avatar }
 // image : { room_id, sender_id, message_type:'image', media_url, name, avatar }
