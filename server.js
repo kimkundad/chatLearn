@@ -151,7 +151,7 @@ app.get('/students-chats', (req, res) => {
             WHERE sender_id != 1 AND is_read = 0
             GROUP BY room_id
         ) uc ON uc.room_id = cr.id
-        ORDER BY unread_count DESC, lm.created_at DESC`;
+        ORDER BY lm.created_at DESC`;
 
     db.query(sql, (err, results) => {
         if (err) {
