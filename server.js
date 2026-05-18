@@ -5,7 +5,7 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const admin = require('firebase-admin');
-const serviceAccount = require('./learnsbuy-376d2-firebase-adminsdk-fbsvc-032bb1dcde.json');
+const serviceAccount = require('./learnsbuy-2af81-firebase-adminsdk-t3nsu-ef673dfcf6.json');
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
