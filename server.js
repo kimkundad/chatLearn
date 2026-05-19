@@ -190,8 +190,8 @@ app.get('/students-chats', (req, res) => {
             lm.message,
             lm.message_type,
             lm.media_url,
-            lm.name,
-            lm.avatar,
+            u.name           AS name,
+            u.avatar         AS avatar,
             lm.created_at,
             lm.sender_id     AS last_sender_id,
             COALESCE(uc.unread_count, 0) AS unread_count
@@ -203,6 +203,7 @@ app.get('/students-chats', (req, res) => {
                 ORDER BY created_at DESC
                 LIMIT 1
             )
+        JOIN users u ON u.id = cr.student_id
         LEFT JOIN (
             SELECT room_id, COUNT(*) AS unread_count
             FROM messages
