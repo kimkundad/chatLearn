@@ -190,8 +190,8 @@ app.get('/students-chats', (req, res) => {
             lm.message,
             lm.message_type,
             lm.media_url,
-            u.name           AS name,
-            u.avatar         AS avatar,
+            COALESCE(sm.name,   lm.name)   AS name,
+            COALESCE(sm.avatar, lm.avatar) AS avatar,
             lm.created_at,
             lm.sender_id     AS last_sender_id,
             COALESCE(uc.unread_count, 0) AS unread_count
@@ -203,7 +203,13 @@ app.get('/students-chats', (req, res) => {
                 ORDER BY created_at DESC
                 LIMIT 1
             )
-        JOIN users u ON u.id = cr.student_id
+        LEFT JOIN messages sm
+            ON sm.id = (
+                SELECT id FROM messages
+                WHERE room_id = cr.id AND sender_id = cr.student_id
+                ORDER BY created_at ASC
+                LIMIT 1
+            )
         LEFT JOIN (
             SELECT room_id, COUNT(*) AS unread_count
             FROM messages
@@ -214,8 +220,8 @@ app.get('/students-chats', (req, res) => {
 
     db.query(sql, (err, results) => {
         if (err) {
-            console.error('❌ Error fetching student chats:', err);
-            return res.status(500).json({ error: 'Failed to fetch student chats' });
+            console.error('❌ Error fetching student chats:', err.sqlMessage || err);
+            return res.status(500).json({ error: 'Failed to fetch student chats', detail: err.sqlMessage });
         }
         res.json(results);
     });
