@@ -66,26 +66,44 @@ function handleDisconnect() {
 handleDisconnect();
 
 
-// ✅ สร้าง table fcm_tokens ถ้ายังไม่มี
+// ✅ สร้าง / migrate table fcm_tokens ให้รองรับหลาย device ต่อ 1 user
 db.query(`
     CREATE TABLE IF NOT EXISTS fcm_tokens (
-        user_id INT PRIMARY KEY,
-        token VARCHAR(512) NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        id         INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        user_id    INT          NOT NULL,
+        token      VARCHAR(512) NOT NULL,
+        updated_at TIMESTAMP    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uq_user_token (user_id, token)
     )
 `, (err) => {
-    if (err) console.error('❌ fcm_tokens table error:', err);
-    else console.log('✅ fcm_tokens table ready');
+    if (err) { console.error('❌ fcm_tokens table error:', err); return; }
+    console.log('✅ fcm_tokens table ready');
+
+    // ถ้า table เดิมมี user_id เป็น PRIMARY KEY (1 token ต่อ user)
+    // ให้ migrate อัตโนมัติ: เพิ่ม id column + เปลี่ยน primary key
+    db.query(`SHOW COLUMNS FROM fcm_tokens LIKE 'id'`, (err2, cols) => {
+        if (err2 || cols.length > 0) return; // มี id แล้ว ไม่ต้องทำ
+
+        console.log('🔄 Migrating fcm_tokens to multi-device schema...');
+        db.query(`ALTER TABLE fcm_tokens DROP PRIMARY KEY`, () => {
+            db.query(`ALTER TABLE fcm_tokens ADD COLUMN id INT NOT NULL AUTO_INCREMENT PRIMARY KEY FIRST`, () => {
+                db.query(`ALTER TABLE fcm_tokens ADD UNIQUE KEY uq_user_token (user_id, token)`, (e) => {
+                    if (e && e.code !== 'ER_DUP_KEYNAME') console.error('❌ migrate error:', e);
+                    else console.log('✅ fcm_tokens migrated to multi-device schema');
+                });
+            });
+        });
+    });
 });
 
-// ✅ บันทึก FCM token
+// ✅ บันทึก FCM token (1 user มีได้หลาย token / device)
 app.post('/save-fcm-token', (req, res) => {
     const { user_id, fcm_token } = req.body;
     if (!user_id || !fcm_token) return res.status(400).json({ error: 'user_id and fcm_token required' });
 
     db.query(
-        'INSERT INTO fcm_tokens (user_id, token) VALUES (?, ?) ON DUPLICATE KEY UPDATE token = ?, updated_at = NOW()',
-        [user_id, fcm_token, fcm_token],
+        'INSERT INTO fcm_tokens (user_id, token) VALUES (?, ?) ON DUPLICATE KEY UPDATE updated_at = NOW()',
+        [user_id, fcm_token],
         (err) => {
             if (err) return res.status(500).json({ error: err });
             console.log(`✅ FCM token saved for user ${user_id}`);
@@ -94,25 +112,46 @@ app.post('/save-fcm-token', (req, res) => {
     );
 });
 
-// ── ส่ง FCM notification ──────────────────────────────────────────────────
+// ── ส่ง FCM notification ไปทุก device ของ user ──────────────────────────
 async function sendFcmToUser(userId, title, body, data = {}) {
     return new Promise((resolve) => {
-        db.query('SELECT token FROM fcm_tokens WHERE user_id = ?', [userId], async (err, rows) => {
+        db.query('SELECT id, token FROM fcm_tokens WHERE user_id = ?', [userId], async (err, rows) => {
             if (err || !rows.length) return resolve();
-            try {
-                await admin.messaging().send({
-                    token: rows[0].token,
-                    notification: { title, body },
-                    data: Object.fromEntries(Object.entries(data).map(([k, v]) => [k, String(v)])),
-                    android: {
-                        priority: 'high',
-                        notification: { sound: 'default', channelId: 'chat_channel' },
-                    },
-                });
-                console.log(`✅ FCM sent to user ${userId}`);
-            } catch (e) {
-                console.error(`❌ FCM error for user ${userId}:`, e.message);
+
+            const dataStr = Object.fromEntries(
+                Object.entries(data).map(([k, v]) => [k, String(v)])
+            );
+            const staleIds = [];
+
+            for (const row of rows) {
+                try {
+                    await admin.messaging().send({
+                        token: row.token,
+                        notification: { title, body },
+                        data: dataStr,
+                        android: {
+                            priority: 'high',
+                            notification: { sound: 'default', channelId: 'chat_channel' },
+                        },
+                        apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+                    });
+                    console.log(`✅ FCM sent to user ${userId} token ...${row.token.slice(-8)}`);
+                } catch (e) {
+                    console.error(`❌ FCM error user ${userId} token ...${row.token.slice(-8)}:`, e.message);
+                    // token หมดอายุ / ไม่ valid — ลบทิ้งเพื่อไม่ให้สะสม
+                    if (e.code === 'messaging/registration-token-not-registered' ||
+                        e.code === 'messaging/invalid-registration-token') {
+                        staleIds.push(row.id);
+                    }
+                }
             }
+
+            if (staleIds.length) {
+                db.query('DELETE FROM fcm_tokens WHERE id IN (?)', [staleIds], () => {
+                    console.log(`🗑️  Removed ${staleIds.length} stale token(s) for user ${userId}`);
+                });
+            }
+
             resolve();
         });
     });
