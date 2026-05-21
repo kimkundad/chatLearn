@@ -115,13 +115,13 @@ app.post('/save-fcm-token', (req, res) => {
 // ── ส่ง FCM notification ไปทุก device ของ user ──────────────────────────
 async function sendFcmToUser(userId, title, body, data = {}) {
     return new Promise((resolve) => {
-        db.query('SELECT id, token FROM fcm_tokens WHERE user_id = ?', [userId], async (err, rows) => {
+        db.query('SELECT token FROM fcm_tokens WHERE user_id = ?', [userId], async (err, rows) => {
             if (err || !rows.length) return resolve();
 
             const dataStr = Object.fromEntries(
                 Object.entries(data).map(([k, v]) => [k, String(v)])
             );
-            const staleIds = [];
+            const staleTokens = [];
 
             for (const row of rows) {
                 try {
@@ -138,18 +138,19 @@ async function sendFcmToUser(userId, title, body, data = {}) {
                     console.log(`✅ FCM sent to user ${userId} token ...${row.token.slice(-8)}`);
                 } catch (e) {
                     console.error(`❌ FCM error user ${userId} token ...${row.token.slice(-8)}:`, e.message);
-                    // token หมดอายุ / ไม่ valid — ลบทิ้งเพื่อไม่ให้สะสม
                     if (e.code === 'messaging/registration-token-not-registered' ||
                         e.code === 'messaging/invalid-registration-token') {
-                        staleIds.push(row.id);
+                        staleTokens.push(row.token);
                     }
                 }
             }
 
-            if (staleIds.length) {
-                db.query('DELETE FROM fcm_tokens WHERE id IN (?)', [staleIds], () => {
-                    console.log(`🗑️  Removed ${staleIds.length} stale token(s) for user ${userId}`);
-                });
+            if (staleTokens.length) {
+                db.query(
+                    'DELETE FROM fcm_tokens WHERE user_id = ? AND token IN (?)',
+                    [userId, staleTokens],
+                    () => console.log(`🗑️  Removed ${staleTokens.length} stale token(s) for user ${userId}`)
+                );
             }
 
             resolve();
