@@ -137,11 +137,20 @@ app.post('/save-fcm-token', (req, res) => {
 async function sendFcmToUser(userId, title, body, data = {}) {
     return new Promise((resolve) => {
         db.query('SELECT token FROM fcm_tokens WHERE user_id = ?', [userId], async (err, rows) => {
-            if (err || !rows.length) return resolve();
+            if (err) {
+                console.error(`❌ FCM token query error user ${userId}:`, err.message);
+                return resolve();
+            }
+            if (!rows.length) {
+                console.log(`⚠️ No FCM token for user ${userId}`);
+                return resolve();
+            }
 
             const dataStr = Object.fromEntries(
                 Object.entries(data).map(([k, v]) => [k, String(v)])
             );
+            dataStr.title = String(title || 'ข้อความใหม่');
+            dataStr.body = String(body || '');
             const staleTokens = [];
 
             for (const row of rows) {
@@ -154,9 +163,19 @@ async function sendFcmToUser(userId, title, body, data = {}) {
                             priority: 'high',
                             notification: { sound: 'default', channelId: 'chat_channel' },
                         },
-                        apns: { payload: { aps: { sound: 'default', badge: 1 } } },
+                        apns: {
+                            headers: {
+                                'apns-priority': '10',
+                            },
+                            payload: {
+                                aps: {
+                                    sound: 'default',
+                                    badge: 1,
+                                },
+                            },
+                        },
                     });
-                    console.log(`✅ FCM sent to user ${userId} token ...${row.token.slice(-8)}`);
+                    console.log(`✅ FCM sent to user ${userId} token ...${row.token.slice(-8)} title="${title}"`);
                 } catch (e) {
                     console.error(`❌ FCM error user ${userId} token ...${row.token.slice(-8)}:`, e.message);
                     if (e.code === 'messaging/registration-token-not-registered' ||
@@ -376,7 +395,13 @@ app.post('/send-message', (req, res) => {
                 : message_type === 'image' ? '📷 รูปภาพ'
                 : message_type === 'audio' ? '🎙️ ข้อความเสียง'
                 : 'ข้อความใหม่';
-            await sendFcmToUser(recipientId, name || 'ข้อความใหม่', notifBody);
+            console.log(`📣 Notify chat recipient ${recipientId} from sender ${sender_id} room ${room_id}`);
+            await sendFcmToUser(recipientId, name || 'ข้อความใหม่', notifBody, {
+                type: 'chat',
+                room_id,
+                sender_id,
+                message_type,
+            });
         });
     });
 });
