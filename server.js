@@ -98,16 +98,37 @@ db.query(`
 
 // ✅ บันทึก FCM token (1 user มีได้หลาย token / device)
 app.post('/save-fcm-token', (req, res) => {
-    const { user_id, fcm_token } = req.body;
+    const { user_id, fcm_token, platform, device_id } = req.body;
     if (!user_id || !fcm_token) return res.status(400).json({ error: 'user_id and fcm_token required' });
 
+    const shortToken = fcm_token.slice(-8);
+    const platformLabel = platform ? `[${platform}]` : '';
+
+    // เช็คก่อนว่า token นี้มีอยู่แล้วไหม
     db.query(
-        'INSERT INTO fcm_tokens (user_id, token) VALUES (?, ?) ON DUPLICATE KEY UPDATE updated_at = NOW()',
+        'SELECT user_id FROM fcm_tokens WHERE user_id = ? AND token = ?',
         [user_id, fcm_token],
-        (err) => {
+        (err, rows) => {
             if (err) return res.status(500).json({ error: err });
-            console.log(`✅ FCM token saved for user ${user_id}`);
-            res.json({ success: true });
+
+            const isNew = rows.length === 0;
+
+            db.query(
+                'INSERT INTO fcm_tokens (user_id, token) VALUES (?, ?) ON DUPLICATE KEY UPDATE updated_at = NOW()',
+                [user_id, fcm_token],
+                (err2) => {
+                    if (err2) {
+                        console.error(`❌ save-fcm-token error user ${user_id} ${platformLabel}:`, err2.message);
+                        return res.status(500).json({ error: err2 });
+                    }
+                    if (isNew) {
+                        console.log(`📲 FCM token ADDED   user ${user_id} ${platformLabel} token ...${shortToken} device=${device_id || '-'}`);
+                    } else {
+                        console.log(`🔄 FCM token REFRESHED user ${user_id} ${platformLabel} token ...${shortToken}`);
+                    }
+                    res.json({ success: true });
+                }
+            );
         }
     );
 });
