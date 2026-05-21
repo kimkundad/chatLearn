@@ -155,7 +155,7 @@ async function sendFcmToUser(userId, title, body, data = {}) {
 
             for (const row of rows) {
                 try {
-                    await admin.messaging().send({
+                    const messageId = await admin.messaging().send({
                         token: row.token,
                         notification: { title, body },
                         data: dataStr,
@@ -180,7 +180,7 @@ async function sendFcmToUser(userId, title, body, data = {}) {
                             },
                         },
                     });
-                    console.log(`✅ FCM sent to user ${userId} token ...${row.token.slice(-8)} title="${title}"`);
+                    console.log(`✅ FCM sent to user ${userId} token ...${row.token.slice(-8)} messageId=${messageId} title="${title}"`);
                 } catch (e) {
                     console.error(`❌ FCM error user ${userId} token ...${row.token.slice(-8)}:`, e.message);
                     if (e.code === 'messaging/registration-token-not-registered' ||
