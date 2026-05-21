@@ -400,7 +400,7 @@ app.post('/send-message', (req, res) => {
                 type: 'chat',
                 room_id,
                 sender_id,
-                message_type,
+                chat_message_type: message_type,
             });
         });
     });
